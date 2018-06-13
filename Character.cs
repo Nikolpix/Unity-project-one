@@ -43,7 +43,7 @@ public class Character : MonoBehaviour {
 		radius = 0.25f;
 		minOffset = 0.01f;
 		dir = Vector3.forward;
-		gravity = new Vector3 (0, -10, 0);
+		gravity = new Vector3 (0, -20, 0);
 		maxStep = 0.5f;
 	}
 
@@ -80,10 +80,10 @@ public class Character : MonoBehaviour {
 				step = offset;
 			else
 				step = offset.normalized * maxStep;
-			if (step.magnitude < minOffset) //seems this thing is not needed
+			if (step.magnitude < minOffset)
 				break;
-			if (Physics.CapsuleCast (bottom, top, radius, step.normalized, out hit, step.magnitude)) {	//if obstacle was met
-				Vector3 err = step.normalized * 0.01f;	//safe distance from wall
+			if (Physics.CapsuleCast (bottom, top, radius, step.normalized, out hit, step.magnitude)) {	//if an obstacle was met
+				Vector3 err = step.normalized * 0.01f;	//safe distance from the wall
 				if (Vector3.Dot (top - bottom, hit.normal) > 0.3f) {   //if the surface was touched by the feet then follow its rotation
 					bottom = hit.point + hit.normal * radius - err;
 					top = hit.point + hit.normal * 3f * radius - err;
@@ -98,13 +98,20 @@ public class Character : MonoBehaviour {
 				offset -= step.normalized * hit.distance;
 				offset = Vector3.ProjectOnPlane (offset, hit.normal);
 				velocity = Vector3.ProjectOnPlane (velocity, hit.normal);
-			} else {	//if the way seems clear then make sure it really is
-				if (!Physics.CheckCapsule (bottom + step, top + step, radius, noPlayerMask) || !FixPenetration (bottom + step, top + step)) {
+			} else {	//if the way seems clear
+				if (!Physics.CheckCapsule (bottom + step, top + step, radius, noPlayerMask) || !FixPenetration (bottom + step, top + step)) {//make sure it really is
 					bottom += step;
 					top += step;
 					offset -= step;
-					//here will be "sticky ground" check
+					if (Physics.Raycast(bottom, bottom - top, out hit, radius * 2)) {	//"sticky ground" check
+						bottom = hit.point + hit.normal * radius * 1.01f;
+						top = bottom + hit.normal * radius * 2;
+						velocity = Vector3.ProjectOnPlane (velocity, top - bottom).normalized * velocity.magnitude;
+						if (draw_gizmos)
+							Debug.DrawLine (hit.point, hit.point + hit.normal, Color.magenta, 10f);
+					}
 				}
+
 			}
 		}
 		if (offset_mod > 0.015f) {	//fixing flicking when walking into a corner
@@ -182,11 +189,18 @@ public class Character : MonoBehaviour {
 			return;
 		}
 
-		if (Mathf.Abs(Vector3.Dot (controls_forward, capsule.up)) > 0.9) {	//fixing control issues when camera is almost collinear to character's vertical vector
-			Debug.Log("foo");
+		float dot1 = Vector3.Dot (controls_forward, capsule.up);	//fixing control issues when forward direction of camera is almost collinear to character's vertical vector
+		if (Mathf.Abs (dot1) > 0.9) {
 			Vector3 temp = controls_up;
 			controls_up = -controls_forward;
 			controls_forward = temp;
+		} else {	//fixing control issues when right direction of camera is almost collinear to character's vertical vector
+			float dot2 = Vector3.Dot (controls_right, capsule.up);
+			if (Mathf.Abs (dot2) > 0.9) {
+				Vector3 temp = controls_up;
+				controls_up = -controls_right;
+				controls_right = temp;
+			}
 		}
 		int inversion = (Vector3.Dot(capsule.up, controls_up) > 0) ? 1 : -1;
 		Vector3 direction = new Vector3 ();
