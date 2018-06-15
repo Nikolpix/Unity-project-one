@@ -14,7 +14,8 @@ public class Character : MonoBehaviour {
 	public float sensitivity;
 	public Transform anchor;
 	public Transform capsule;
-	public bool grounded = true;
+	public bool grounded;
+	public bool was_grounded;
 	public float speed;
 	public float walkSpeed;
 	public bool walk;
@@ -22,6 +23,9 @@ public class Character : MonoBehaviour {
 	public float minOffset;
 	public float maxStep;
 	public bool draw_gizmos = true;
+	public float min_speed_to_rotate;
+	public float max_speed_to_rotate;
+	public float max_steepness;
 	int noPlayerMask = 255;
 
 	public Vector3 debug_vector;
@@ -32,19 +36,24 @@ public class Character : MonoBehaviour {
 	Vector3 top;
 
 	void Start () {
-		acceleration = 20f;
+		acceleration = 10f;
 		brakeAcc = 20f;
-		angularAcc = 10f;
+		angularAcc = 5f;
 		sensitivity = 100f;
 		speed = velocity.magnitude;
-		walkSpeed = 6f;
+		walkSpeed = 10f;
 		walk = true;
 		prevPos = transform.position;
 		radius = 0.25f;
 		minOffset = 0.01f;
 		dir = Vector3.forward;
 		gravity = new Vector3 (0, -20, 0);
-		maxStep = 0.5f;
+		maxStep = 0.3f;
+		min_speed_to_rotate = 6f;
+		max_speed_to_rotate = 10f;
+		max_steepness = 50f;
+		grounded = true;
+		was_grounded = true;
 	}
 
 	void Update () {
@@ -86,7 +95,7 @@ public class Character : MonoBehaviour {
 				Vector3 err = step.normalized * 0.01f;	//safe distance from the wall
 				if (Vector3.Dot (top - bottom, hit.normal) > 0.3f) {   //if the surface was touched by the feet then follow its rotation
 					bottom = hit.point + hit.normal * radius - err;
-					top = hit.point + hit.normal * 3f * radius - err;
+					top = bottom + RotationCount (- gravity.normalized, hit.normal, min_speed_to_rotate, max_speed_to_rotate) * 2f * radius;
 					if (draw_gizmos)
 						Debug.DrawLine (hit.point, hit.point + hit.normal, Color.blue, 10f);
 				} else {	//otherwise do not rotate
@@ -97,16 +106,22 @@ public class Character : MonoBehaviour {
 				}
 				offset -= step.normalized * hit.distance;
 				offset = Vector3.ProjectOnPlane (offset, hit.normal);
-				velocity = Vector3.ProjectOnPlane (velocity, hit.normal);
+				if (was_grounded)
+					velocity = Vector3.ProjectOnPlane (velocity, hit.normal).normalized * velocity.magnitude;
+				else
+					velocity = Vector3.ProjectOnPlane (velocity, hit.normal);
 			} else {	//if the way seems clear
-				if (!Physics.CheckCapsule (bottom + step, top + step, radius, noPlayerMask) || !FixPenetration (bottom + step, top + step)) {//make sure it really is
+				if (grounded && !Physics.CheckCapsule (bottom + step, top + step, radius, noPlayerMask) || !FixPenetration (bottom + step, top + step)) {//make sure it really is
 					bottom += step;
 					top += step;
 					offset -= step;
-					if (Physics.Raycast(bottom, bottom - top, out hit, radius * 2)) {	//"sticky ground" check
+					if (grounded && Physics.SphereCast (new Ray(bottom, bottom - top), radius, out hit, radius) && Physics.Raycast (new Ray (bottom, bottom - top), radius * 2)) {	//"sticky ground" check
 						bottom = hit.point + hit.normal * radius * 1.01f;
-						top = bottom + hit.normal * radius * 2;
-						velocity = Vector3.ProjectOnPlane (velocity, top - bottom).normalized * velocity.magnitude;
+						top = bottom + RotationCount (- gravity.normalized, hit.normal, min_speed_to_rotate, max_speed_to_rotate) * radius * 2;
+						if (was_grounded)
+							velocity = Vector3.ProjectOnPlane (velocity, hit.normal).normalized * velocity.magnitude;
+						else
+							velocity = Vector3.ProjectOnPlane (velocity, hit.normal);
 						if (draw_gizmos)
 							Debug.DrawLine (hit.point, hit.point + hit.normal, Color.magenta, 10f);
 					}
@@ -151,19 +166,9 @@ public class Character : MonoBehaviour {
 		return flag;
 	}
 
-	void GroundCheck(){
-		Vector3 down = bottom - top;
-		Ray ray = new Ray (bottom, down);
-		RaycastHit hit;
-		if (Physics.SphereCast (ray, radius / 2f, out hit, 0.3f, noPlayerMask)) {
-			grounded = true;
-		} else {
-			grounded = false;
-		}
-	}
-
 	void ApplyGravity(){
-		velocity += gravity * Time.deltaTime;
+		if (!grounded)
+			velocity += gravity * Time.deltaTime;
 	}
 
 	void OnDrawGizmos(){
@@ -172,6 +177,41 @@ public class Character : MonoBehaviour {
 			Gizmos.DrawWireSphere (top, 0.1f);
 			Gizmos.DrawWireSphere (transform.position, 0.15f);
 		}
+	}
+
+	void GroundCheck() {
+		was_grounded = grounded;
+		RaycastHit hit;
+		grounded = (Physics.SphereCast (new Ray (bottom, bottom - top), radius, out hit, 0.1f) && (Vector3.Angle (gravity, hit.normal) > 90 + max_steepness || speed > walkSpeed));
+	}
+
+	bool StickyGroundCheck () {
+		RaycastHit hit;
+		Vector3 offset = velocity.normalized * 0.001f;
+		Vector3 normal1;
+		Vector3 normal2;
+		if (Physics.Raycast (new Ray (bottom + offset, bottom - top), out hit, radius * 3)) {
+			normal1 = hit.normal;
+			Debug.DrawLine (hit.point, hit.point + hit.normal, Color.yellow, 2f);
+			if (Physics.Raycast (new Ray (bottom - offset, bottom - top * 2), out hit, radius * 3)) {
+				normal2 = hit.normal;
+				Debug.DrawLine (hit.point, hit.point + hit.normal, Color.yellow, 2f);
+				return (Vector3.Angle (normal1, normal2) < 45f);
+			} else
+				return false;
+		} else
+			return false;
+	}
+
+	Vector3 RotationCount (Vector3 normal1, Vector3 normal2, float min_speed, float max_speed) {
+		Vector3 result;
+		if (speed <= min_speed)
+			result = normal1;
+		else if (speed >= max_speed)
+			result = normal2;
+		else
+			result = Vector3.Lerp (normal1, normal2, (speed - min_speed) / (max_speed - min_speed));
+		return result;
 	}
 
 	void GetInput (Vector3 controls_forward1, Vector3 controls_up1) {
