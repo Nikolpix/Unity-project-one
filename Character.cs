@@ -35,6 +35,15 @@ public class Character : MonoBehaviour {
 	Vector3 bottom;
 	Vector3 top;
 
+	enum State {
+		walking,
+		running,
+		jumping,
+		sliding,
+		drifting,
+		crouching
+	}
+
 	void Start () {
 		acceleration = 10f;
 		brakeAcc = 20f;
@@ -47,7 +56,7 @@ public class Character : MonoBehaviour {
 		radius = 0.25f;
 		minOffset = 0.01f;
 		dir = Vector3.forward;
-		gravity = new Vector3 (0, -20, 0);
+		gravity = new Vector3 (0, -15, 0);
 		maxStep = 0.3f;
 		min_speed_to_rotate = 6f;
 		max_speed_to_rotate = 10f;
@@ -71,6 +80,8 @@ public class Character : MonoBehaviour {
 		}
 		prevPos = transform.position;
 	}
+
+// MAIN MOVEMENT SCRIPT
 
 	void Move () {
 		Vector3 offset = velocity * Time.deltaTime;
@@ -140,79 +151,7 @@ public class Character : MonoBehaviour {
 		capsule.rotation = Quaternion.LookRotation (dir, top - bottom);
 	}
 
-	bool FixPenetration (Vector3 point0, Vector3 point1) {	//function that tries to fix penetration of character's capsule and colliders and return true if it does
-		Collider[] colliders = Physics.OverlapCapsule (point0, point1, radius, noPlayerMask);
-		Vector3 solveVector = Vector3.zero;
-		Vector3 direction = Vector3.zero;
-		float distance;
-		bool flag = false;
-		for (int i = 0; i < colliders.Length; i++) {
-			if (Physics.ComputePenetration (capsule.GetComponent<Collider> (), (point0 + point1) / 2.0f, capsule.transform.rotation, colliders [i], colliders [i].transform.position, colliders [i].transform.rotation, out direction, out distance)) {
-				solveVector += direction * distance;
-				flag = true;
-			}
-		}
-		if (flag) {
-			solveVector += solveVector.normalized * 0.01f;
-			int k = 0;
-			do {
-				point0 += solveVector;
-				point1 += solveVector;
-				k++;
-			} while (Physics.CheckCapsule (point0, point1, radius, noPlayerMask) && k < 10);
-			bottom = point0;
-			top = point1;
-		}
-		return flag;
-	}
-
-	void ApplyGravity(){
-		if (!grounded)
-			velocity += gravity * Time.deltaTime;
-	}
-
-	void OnDrawGizmos(){
-		if (draw_gizmos) {
-			Gizmos.DrawWireSphere (bottom, 0.1f);
-			Gizmos.DrawWireSphere (top, 0.1f);
-			Gizmos.DrawWireSphere (transform.position, 0.15f);
-		}
-	}
-
-	void GroundCheck() {
-		was_grounded = grounded;
-		RaycastHit hit;
-		grounded = (Physics.SphereCast (new Ray (bottom, bottom - top), radius, out hit, 0.1f) && (Vector3.Angle (gravity, hit.normal) > 90 + max_steepness || speed > walkSpeed));
-	}
-
-	bool StickyGroundCheck () {
-		RaycastHit hit;
-		Vector3 offset = velocity.normalized * 0.001f;
-		Vector3 normal1;
-		Vector3 normal2;
-		if (Physics.Raycast (new Ray (bottom + offset, bottom - top), out hit, radius * 3)) {
-			normal1 = hit.normal;
-			Debug.DrawLine (hit.point, hit.point + hit.normal, Color.yellow, 2f);
-			if (Physics.Raycast (new Ray (bottom - offset, bottom - top * 2), out hit, radius * 3)) {
-				normal2 = hit.normal;
-				Debug.DrawLine (hit.point, hit.point + hit.normal, Color.yellow, 2f);
-				return (Vector3.Angle (normal1, normal2) < 45f);
-			} else
-				return false;
-		} else
-			return false;
-	}
-
-	Vector3 RotationCount (Vector3 normal1, Vector3 normal2, float min_speed, float max_speed) {
-		Vector3 result;
-		if (speed <= min_speed)
-			result = normal1;
-		else if (speed >= max_speed)
-			result = normal2;
-		else
-			result = Vector3.Lerp (normal1, normal2, (speed - min_speed) / (max_speed - min_speed));
-		return result;
-	}
+//INPUT SCRIPT
 
 	void GetInput (Vector3 controls_forward1, Vector3 controls_up1) {
 		Vector3 controls_forward = new Vector3 (controls_forward1.x, controls_forward1.y, controls_forward1.z);
@@ -220,6 +159,7 @@ public class Character : MonoBehaviour {
 		speed = velocity.magnitude;
 		walk = !Input.GetButton ("Run");
 		Vector3 controls_right = Vector3.Cross (controls_up, controls_forward);
+		acceleration = (grounded) ? 10 : 5;
 
 		anchor.Rotate (transform.up, Input.GetAxis ("Mouse X") * sensitivity * Time.deltaTime, Space.World);	//mouse controls
 		anchor.Rotate (anchor.right, - Input.GetAxis ("Mouse Y") * sensitivity * Time.deltaTime, Space.World);
@@ -277,6 +217,82 @@ public class Character : MonoBehaviour {
 		}
 		else
 			velocity += direction * acceleration * Time.fixedDeltaTime * brake_multiplier;
+	}
+
+//ADDITIONAL SCRIPTS
+
+	bool FixPenetration (Vector3 point0, Vector3 point1) {	//function that tries to fix penetration of character's capsule and colliders and return true if it does
+		Collider[] colliders = Physics.OverlapCapsule (point0, point1, radius, noPlayerMask);
+		Vector3 solveVector = Vector3.zero;
+		Vector3 direction = Vector3.zero;
+		float distance;
+		bool flag = false;
+		for (int i = 0; i < colliders.Length; i++) {
+			if (Physics.ComputePenetration (capsule.GetComponent<Collider> (), (point0 + point1) / 2.0f, capsule.transform.rotation, colliders [i], colliders [i].transform.position, colliders [i].transform.rotation, out direction, out distance)) {
+				solveVector += direction * distance;
+				flag = true;
+			}
+		}
+		if (flag) {
+			solveVector += solveVector.normalized * 0.01f;
+			int k = 0;
+			do {
+				point0 += solveVector;
+				point1 += solveVector;
+				k++;
+			} while (Physics.CheckCapsule (point0, point1, radius, noPlayerMask) && k < 10);
+			bottom = point0;
+			top = point1;
+		}
+		return flag;
+	}
+
+	void ApplyGravity(){
+		if (!grounded)
+			velocity += gravity * Time.deltaTime;
+	}
+
+	void OnDrawGizmos(){
+		if (draw_gizmos) {
+			Gizmos.DrawWireSphere (bottom, 0.1f);
+			Gizmos.DrawWireSphere (top, 0.1f);
+			Gizmos.DrawWireSphere (transform.position, 0.15f);
+		}
+	}
+
+	void GroundCheck() {
+		was_grounded = grounded;
+		RaycastHit hit;
+		grounded = (Physics.SphereCast (new Ray (bottom, bottom - top), radius, out hit, 0.1f) && (Vector3.Angle (gravity, hit.normal) > 90 + max_steepness || speed > min_speed_to_rotate));
+	}
+
+	bool StickyGroundCheck () {
+		RaycastHit hit;
+		Vector3 offset = velocity.normalized * 0.001f;
+		Vector3 normal1;
+		Vector3 normal2;
+		if (Physics.Raycast (new Ray (bottom + offset, bottom - top), out hit, radius * 3)) {
+			normal1 = hit.normal;
+			Debug.DrawLine (hit.point, hit.point + hit.normal, Color.yellow, 2f);
+			if (Physics.Raycast (new Ray (bottom - offset, bottom - top * 2), out hit, radius * 3)) {
+				normal2 = hit.normal;
+				Debug.DrawLine (hit.point, hit.point + hit.normal, Color.yellow, 2f);
+				return (Vector3.Angle (normal1, normal2) < 45f);
+			} else
+				return false;
+		} else
+			return false;
+	}
+
+	Vector3 RotationCount (Vector3 normal1, Vector3 normal2, float min_speed, float max_speed) {
+		Vector3 result;
+		if (speed <= min_speed)
+			result = normal1;
+		else if (speed >= max_speed)
+			result = normal2;
+		else
+			result = Vector3.Lerp (normal1, normal2, (speed - min_speed) / (max_speed - min_speed));
+		return result;
 	}
 
 	float PDif (float minued, float substrahend){
