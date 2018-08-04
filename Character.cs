@@ -16,6 +16,7 @@ public class Character : MonoBehaviour {
 	public Transform capsule;
 	public bool grounded;
 	public bool was_grounded;
+	public bool sliding;
 	public float speed;
 	public float walkSpeed;
 	public bool walk;
@@ -65,8 +66,30 @@ public class Character : MonoBehaviour {
 		was_grounded = true;
 	}
 
+	public Vector3 bar;
+	public int hitIndex;
 	void Update () {
+		RaycastHit hit;
+		if (!Physics.Raycast(Camera.main.ScreenPointToRay(Input.mousePosition), out hit))
+			return;
 
+		MeshCollider meshCollider = hit.collider as MeshCollider;
+		if (meshCollider == null || meshCollider.sharedMesh == null)
+			return;
+
+		Mesh mesh = meshCollider.sharedMesh;
+		Vector3[] normals = mesh.normals;
+		int[] triangles = mesh.triangles;
+		Vector3 n0 = normals[triangles[hit.triangleIndex * 3 + 0]];
+		Vector3 n1 = normals[triangles[hit.triangleIndex * 3 + 1]];
+		Vector3 n2 = normals[triangles[hit.triangleIndex * 3 + 2]];
+		Vector3 baryCenter = hit.barycentricCoordinate;
+		Vector3 interpolatedNormal = n0 * baryCenter.x + n1 * baryCenter.y + n2 * baryCenter.z;
+		interpolatedNormal = interpolatedNormal.normalized;
+		Transform hitTransform = hit.collider.transform;
+		interpolatedNormal = hitTransform.TransformDirection(interpolatedNormal);
+		Debug.DrawRay(hit.point, interpolatedNormal);
+		hitIndex = hit.triangleIndex;
 	}
 
 	void FixedUpdate() {
@@ -106,7 +129,7 @@ public class Character : MonoBehaviour {
 				Vector3 err = step.normalized * 0.01f;	//safe distance from the wall
 				if (Vector3.Dot (top - bottom, hit.normal) > 0.3f) {   //if the surface was touched by the feet then follow its rotation
 					bottom = hit.point + hit.normal * radius - err;
-					top = bottom + RotationCount (- gravity.normalized, hit.normal, min_speed_to_rotate, max_speed_to_rotate) * 2f * radius;
+					top = bottom + hit.normal * 2f * radius;
 					if (draw_gizmos)
 						Debug.DrawLine (hit.point, hit.point + hit.normal, Color.blue, 10f);
 				} else {	//otherwise do not rotate
@@ -122,22 +145,27 @@ public class Character : MonoBehaviour {
 				else
 					velocity = Vector3.ProjectOnPlane (velocity, hit.normal);
 			} else {	//if the way seems clear
-				if (grounded && !Physics.CheckCapsule (bottom + step, top + step, radius, noPlayerMask) || !FixPenetration (bottom + step, top + step)) {//make sure it really is
+				if (!Physics.CheckCapsule (bottom + step, top + step, radius, noPlayerMask) || !FixPenetration (bottom + step, top + step)) {//make sure it really is
 					bottom += step;
 					top += step;
 					offset -= step;
-					if (grounded && Physics.SphereCast (new Ray(bottom, bottom - top), radius, out hit, radius) && Physics.Raycast (new Ray (bottom, bottom - top), radius * 2)) {	//"sticky ground" check
-						bottom = hit.point + hit.normal * radius * 1.01f;
-						top = bottom + RotationCount (- gravity.normalized, hit.normal, min_speed_to_rotate, max_speed_to_rotate) * radius * 2;
-						if (was_grounded)
-							velocity = Vector3.ProjectOnPlane (velocity, hit.normal).normalized * velocity.magnitude;
+					if (grounded && !sliding && Physics.Raycast (new Ray (bottom, bottom - top), radius * 2) && Physics.SphereCast (new Ray(bottom, bottom - top), radius, out hit, radius) && hit.transform.tag != "not_sticky") {	//"sticky ground" check
+						Vector3 normal;
+						if (Vector3.Dot (top - bottom, hit.normal) > 0.3f)
+							normal = hit.normal;
 						else
-							velocity = Vector3.ProjectOnPlane (velocity, hit.normal);
+							normal = (top - bottom).normalized;
+						bottom = hit.point + normal * radius * 1.01f;
+						top = bottom + normal * radius * 2;
+						SelectTriange (hit);
+						if (was_grounded)
+							velocity = Vector3.ProjectOnPlane (velocity, normal).normalized * velocity.magnitude;
+						else
+							velocity = Vector3.ProjectOnPlane (velocity, normal);
 						if (draw_gizmos)
-							Debug.DrawLine (hit.point, hit.point + hit.normal, Color.magenta, 10f);
+							Debug.DrawLine (hit.point, hit.point + normal, Color.magenta, 10f);
 					}
 				}
-
 			}
 		}
 		if (offset_mod > 0.015f) {	//fixing flicking when walking into a corner
@@ -164,7 +192,7 @@ public class Character : MonoBehaviour {
 		anchor.Rotate (transform.up, Input.GetAxis ("Mouse X") * sensitivity * Time.deltaTime, Space.World);	//mouse controls
 		anchor.Rotate (anchor.right, - Input.GetAxis ("Mouse Y") * sensitivity * Time.deltaTime, Space.World);
 
-		if (!Input.GetButton ("Vertical") && !Input.GetButton ("Horizontal") && grounded) {		//if no input then autobrake
+		if (!Input.GetButton ("Vertical") && !Input.GetButton ("Horizontal") && grounded && !sliding) {		//if no input then autobrake
 			velocity = Pdif (velocity, velocity.normalized * brakeAcc * Time.fixedDeltaTime);
 			return;
 		}
@@ -248,7 +276,7 @@ public class Character : MonoBehaviour {
 	}
 
 	void ApplyGravity(){
-		if (!grounded)
+		if (!grounded || sliding)
 			velocity += gravity * Time.deltaTime;
 	}
 
@@ -263,7 +291,8 @@ public class Character : MonoBehaviour {
 	void GroundCheck() {
 		was_grounded = grounded;
 		RaycastHit hit;
-		grounded = (Physics.SphereCast (new Ray (bottom, bottom - top), radius, out hit, 0.1f) && (Vector3.Angle (gravity, hit.normal) > 90 + max_steepness || speed > min_speed_to_rotate));
+		grounded = (Physics.SphereCast (new Ray (bottom, bottom - top), radius, out hit, 0.1f));
+		sliding = !(Vector3.Angle (gravity, hit.normal) > 90 + max_steepness || speed > min_speed_to_rotate);
 	}
 
 	bool StickyGroundCheck () {
@@ -295,11 +324,115 @@ public class Character : MonoBehaviour {
 		return result;
 	}
 
+	void SelectTriange (RaycastHit hit) {
+		MeshCollider meshCollider = hit.collider as MeshCollider;
+		if (meshCollider == null || meshCollider.sharedMesh == null)
+			return;
+
+		Mesh mesh = meshCollider.sharedMesh;
+		Vector3[] vertices = mesh.vertices;
+		int[] triangles = mesh.triangles;
+		Vector3 p0 = vertices[triangles[hit.triangleIndex * 3 + 0]];
+		Vector3 p1 = vertices[triangles[hit.triangleIndex * 3 + 1]];
+		Vector3 p2 = vertices[triangles[hit.triangleIndex * 3 + 2]];
+		Transform hitTransform = hit.collider.transform;
+		p0 = hitTransform.TransformPoint(p0);
+		p1 = hitTransform.TransformPoint(p1);
+		p2 = hitTransform.TransformPoint(p2);
+		Debug.DrawLine(p0, p1, Color.red, 0.2f);
+		Debug.DrawLine(p1, p2, Color.red, 0.2f);
+		Debug.DrawLine(p2, p0, Color.red, 0.2f);
+	}
+
+	Vector3 FixNormal (RaycastHit hit)
+	{
+		MeshCollider meshCollider = hit.collider as MeshCollider;
+		if (meshCollider == null || meshCollider.sharedMesh == null)	//make sure it has mesh collider
+			return hit.normal;
+		int index = -1;
+		int hitTriangle = hit.triangleIndex;
+		Vector3[] verts = meshCollider.sharedMesh.vertices;
+		int[] tris = meshCollider.sharedMesh.triangles;
+		Vector3 p = meshCollider.transform.InverseTransformPoint (hit.point);
+		Vector3 baryCenter = Barycenter (p, verts [tris [hitTriangle * 3 + 0]], verts [tris [hitTriangle * 3 + 1]], verts [tris [hitTriangle * 3 + 2]]); 	//make sure we hit an edge
+		bar = baryCenter;
+		if (baryCenter.x < 0.0001f && baryCenter.y > 0.0001f && baryCenter.z > 0.0001f) index = 0;
+		else if (baryCenter.x > 0.0001f && baryCenter.y < 0.0001f && baryCenter.z > 0.0001f) index = 1;
+		else if (baryCenter.x > 0.0001f && baryCenter.y > 0.0001f && baryCenter.z < 0.0001f) index = 2;
+		if (index == -1)
+			return hit.normal;
+		int adjacentTriangle = -1;
+		int vertexA;
+		int vertexB;
+		switch (index) {
+		case 0:
+			vertexA = tris [hitTriangle * 3 + 1];
+			vertexB = tris [hitTriangle * 3 + 2];
+			break;
+		case 1:
+			vertexA = tris [hitTriangle * 3 + 0];
+			vertexB = tris [hitTriangle * 3 + 2];
+			break;
+		default:
+			vertexA = tris [hitTriangle * 3 + 0];
+			vertexB = tris [hitTriangle * 3 + 1];
+			break;
+		}
+		int i = 0;
+		int count = 0;
+		while (i < tris.Length / 3 && adjacentTriangle == -1) {		//searching for an adjacent triangle
+			count = 0;
+			if (i == 79)
+				Debug.Log ("lol");
+			for (int j = 0; j < 3; j++)
+				if ((tris[i * 3 + j] == vertexA || tris[i * 3 + j] == vertexB) && i != hitTriangle)
+					count++;
+			if (count == 2)
+				adjacentTriangle = i;
+			i ++;
+		}
+		if (adjacentTriangle == -1)
+			return hit.normal;
+		Vector3 normal1 = Vector3.Cross (verts [tris [hitTriangle * 3 + 1]] - verts [tris [hitTriangle * 3 + 0]],	//normal of hit triangle
+										verts [tris [hitTriangle * 3 + 2]] - verts [tris [hitTriangle * 3 + 0]]).normalized;
+		Vector3 normal2 = Vector3.Cross (verts [tris [adjacentTriangle * 3 + 1]] - verts [tris [adjacentTriangle * 3 + 0]], 	//normal of adjacent triangle
+										verts [tris [adjacentTriangle * 3 + 2]] - verts [tris [adjacentTriangle * 3 + 0]]).normalized;
+		return (Vector3.Angle (normal1, normal2) < 15f) ? hit.normal : normal1;
+	}
+
 	float PDif (float minued, float substrahend){
 		return (minued > substrahend) ? minued - substrahend : 0;
 	}
 
 	Vector3 Pdif (Vector3 minued, Vector3 substrahend){			//only for collinear vectors
 		return (minued.magnitude > substrahend.magnitude) ? minued - substrahend : Vector3.zero;
+	}
+
+	public static Vector3 Barycenter (Vector3 point, Vector3 v1, Vector3 v2, Vector3 v3) {
+		Vector3 normal = Vector3.Cross (v2 - v1, v3 - v1);
+		Vector3 result = new Vector3 ();
+		if (Mathf.Abs (normal.z) > Mathf.Abs (normal.x) && Mathf.Abs (normal.z) > Mathf.Abs (normal.y)) {	//oh my god, I just wanna kill myself
+			result.x = ((point.y - v3.y) * (v2.x - v3.x) - (point.x - v3.x) * (v2.y - v3.y)) /
+				((v1.y - v3.y) * (v2.x - v3.x) - (v1.x - v3.x) * (v2.y - v3.y));
+			result.y = ((point.y - v1.y) * (v3.x - v1.x) - (point.x - v1.x) * (v3.y - v1.y)) /
+				((v2.y - v1.y) * (v3.x - v1.x) - (v2.x - v1.x) * (v3.y - v1.y));
+			result.z = ((point.y - v1.y) * (v2.x - v1.x) - (point.x - v1.x) * (v2.y - v1.y)) /
+				((v3.y - v1.y) * (v2.x - v1.x) - (v3.x - v1.x) * (v2.y - v1.y));
+		} else if (Mathf.Abs (normal.y) > Mathf.Abs (normal.x) && Mathf.Abs (normal.y) > Mathf.Abs (normal.z)) {
+			result.x = ((point.z - v3.z) * (v2.x - v3.x) - (point.x - v3.x) * (v2.z - v3.z)) /
+				((v1.z - v3.z) * (v2.x - v3.x) - (v1.x - v3.x) * (v2.z - v3.z));
+			result.y = ((point.z - v1.z) * (v3.x - v1.x) - (point.x - v1.x) * (v3.z - v1.z)) /
+				((v2.z - v1.z) * (v3.x - v1.x) - (v2.x - v1.x) * (v3.z - v1.z));
+			result.z = ((point.z - v1.z) * (v2.x - v1.x) - (point.x - v1.x) * (v2.z - v1.z)) /
+				((v3.z - v1.z) * (v2.x - v1.x) - (v3.x - v1.x) * (v2.z - v1.z));
+		} else {
+			result.x = ((point.z - v3.z) * (v2.y - v3.y) - (point.y - v3.y) * (v2.z - v3.z)) /
+				((v1.z - v3.z) * (v2.y - v3.y) - (v1.y - v3.y) * (v2.z - v3.z));
+			result.y = ((point.z - v1.z) * (v3.y - v1.y) - (point.y - v1.y) * (v3.z - v1.z)) /
+				((v2.z - v1.z) * (v3.y - v1.y) - (v2.y - v1.y) * (v3.z - v1.z));
+			result.z = ((point.z - v1.z) * (v2.y - v1.y) - (point.y - v1.y) * (v2.z - v1.z)) /
+				((v3.z - v1.z) * (v2.y - v1.y) - (v3.y - v1.y) * (v2.z - v1.z));
+		}
+		return result;
 	}
 }
